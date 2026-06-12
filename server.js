@@ -1,3 +1,7 @@
+// server.js (সম্পূর্ণ কোড – bcrypt, OTP ফরগট পাসওয়ার্ড, 2FA, পুশ নোটিফিকেশন, চ্যাট, ক্লাউডিনারি, গুগল ড্রাইভ)
+// প্রয়োজনীয় প্যাকেজ:
+// express, mongoose, cors, nodemailer, socket.io, cloudinary, jsonwebtoken, bcryptjs, googleapis, dotenv, crypto
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -7,27 +11,34 @@ const { Server } = require('socket.io');
 const cloudinary = require('cloudinary').v2;
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { google } = require('googleapis');
 require('dotenv').config();
 
+// ==================== অ্যাপ ও সার্ভার ====================
 const app = express();
 const server = http.createServer(app);
 
+// ==================== মিডলওয়্যার ====================
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// ==================== ক্লাউডিনারি কনফিগ ====================
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// ==================== JWT সিক্রেট ====================
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
+// ==================== ডাটাবেস কানেকশন ====================
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ ডাটাবেস সফলভাবে কানেক্ট হয়েছে!'))
   .catch((err) => console.log('❌ ডাটাবেস কানেকশন এরর: ', err));
 
+// ==================== অথেনটিকেশন মিডলওয়্যার ====================
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -43,7 +54,10 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-const User = require('./models/User');
+// ==================== মডেল সমুহ ====================
+const User = require('./models/User');   // নিশ্চিত করো মডেলে নিচের ফিল্ডগুলো আছে:
+// twoFactorEnabled (Boolean), twoFactorCode (String), twoFactorCodeExpires (Date), twoFactorToken (String),
+// resetCode (String), resetCodeExpires (Date), pushToken (String), credits (Number)
 
 const ChatSchema = new mongoose.Schema({
   sender: String,
@@ -107,6 +121,7 @@ const MissionSchema = new mongoose.Schema({
 });
 const Mission = mongoose.model('Mission', MissionSchema);
 
+// ==================== ইমেইল ট্রান্সপোর্টার ====================
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -115,12 +130,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
-  scopes: ['https://www.googleapis.com/auth/drive.file'],
-});
-const drive = google.drive({ version: 'v3', auth });
-
+// সুন্দর ইমেইল টেমপ্লেট
 const mailBase = (title, bodyHtml) => `
   <div style="max-width: 600px; margin: auto; padding: 20px; background: #f4f6f8; border-radius: 12px; font-family: 'Segoe UI', Tahoma, sans-serif;">
     <div style="text-align: center; margin-bottom: 20px;">
@@ -133,13 +143,24 @@ const mailBase = (title, bodyHtml) => `
     <p style="text-align: center; font-size: 11px; color: #bbb; margin-top: 15px;">© 2026 আবিদার পাড়া ক্লাব। সর্বস্বত্ব সংরক্ষিত।</p>
   </div>`;
 
-// ======================= API রাউট =======================
+// ==================== গুগল ড্রাইভ (ব্যাকআপ) ====================
+const auth = new google.auth.GoogleAuth({
+  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
+  scopes: ['https://www.googleapis.com/auth/drive.file'],
+});
+const drive = google.drive({ version: 'v3', auth });
 
-// ১. ইমেজ আপলোড
+// ======================================================
+// 🚀 API রাউট
+// ======================================================
+
+// ১. ইমেজ আপলোড (ক্লাউডিনারি)
 app.post('/api/upload', async (req, res) => {
   try {
     const fileStr = req.body.data;
-    const uploadResponse = await cloudinary.uploader.upload(fileStr, { upload_preset: 'ml_default' });
+    const uploadResponse = await cloudinary.uploader.upload(fileStr, {
+      upload_preset: 'ml_default',
+    });
     res.json({ success: true, url: uploadResponse.secure_url });
   } catch (error) {
     console.error(error);
@@ -156,7 +177,7 @@ app.post('/api/users/profile-picture', verifyToken, async (req, res) => {
     const uploadResponse = await cloudinary.uploader.upload(image, {
       folder: 'profile_pictures',
       public_id: `user_${req.userId}_${Date.now()}`,
-      transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face' }]
+      transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face' }],
     });
 
     const user = await User.findById(req.userId);
@@ -170,7 +191,7 @@ app.post('/api/users/profile-picture', verifyToken, async (req, res) => {
   }
 });
 
-// ৩. রেজিস্ট্রেশন ও লগইন (bcrypt)
+// ৩. রেজিস্ট্রেশন ও লগইন (2FA সহ)
 app.post('/api/register', async (req, res) => {
   try {
     const { name, email, phone, fatherName, address, bloodGroup, password } = req.body;
@@ -204,12 +225,154 @@ app.post('/api/login', async (req, res) => {
     if (user.status === 'pending')
       return res.status(403).json({ success: false, message: 'অ্যাকাউন্ট এখনো পেন্ডিং।' });
 
+    // 2FA চালু থাকলে OTP পাঠাও
+    if (user.twoFactorEnabled) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const tempToken = crypto.randomBytes(16).toString('hex');
+      user.twoFactorCode = otp;
+      user.twoFactorCodeExpires = new Date(Date.now() + 2 * 60 * 1000); // 2 মিনিট
+      user.twoFactorToken = tempToken;
+      await user.save();
+
+      transporter.sendMail({
+        from: `"আবিদার পাড়া ক্লাব" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: '🔐 লগইন OTP',
+        html: mailBase('', `
+          <h3>আপনার লগইন OTP</h3>
+          <div style="background: #00adb5; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 10px; margin: 20px 0;">
+            ${otp}
+          </div>
+          <p style="color: #888;">এই OTP ২ মিনিটের মধ্যে ব্যবহার করুন।</p>
+        `),
+      });
+
+      return res.json({ success: true, requires2FA: true, tempToken });
+    }
+
+    // 2FA না থাকলে সরাসরি JWT
     const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ success: true, user, token });
   } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর!' }); }
 });
 
-// ৪. মেম্বারশিপ ম্যানেজমেন্ট (Admin)
+// ৪. 2FA OTP যাচাই
+app.post('/api/verify-2fa', async (req, res) => {
+  try {
+    const { tempToken, otp } = req.body;
+    if (!tempToken || !otp) return res.status(400).json({ success: false, message: 'প্রয়োজনীয় তথ্য প্রদান করুন' });
+
+    const user = await User.findOne({ twoFactorToken: tempToken });
+    if (!user) return res.status(400).json({ success: false, message: 'অবৈধ সেশন' });
+    if (new Date() > user.twoFactorCodeExpires) {
+      return res.status(400).json({ success: false, message: 'OTP-র মেয়াদ শেষ' });
+    }
+    if (user.twoFactorCode !== otp.trim()) {
+      return res.status(400).json({ success: false, message: 'OTP ভুল' });
+    }
+
+    user.twoFactorCode = undefined;
+    user.twoFactorCodeExpires = undefined;
+    user.twoFactorToken = undefined;
+    await user.save();
+
+    const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ success: true, user, token });
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
+});
+
+// ৫. 2FA টগল (প্রোফাইলে)
+app.put('/api/users/2fa', verifyToken, async (req, res) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') return res.status(400).json({ success: false, message: 'enabled (true/false) প্রদান করুন' });
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
+    user.twoFactorEnabled = enabled;
+    await user.save();
+    res.json({ success: true, twoFactorEnabled: user.twoFactorEnabled });
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
+});
+
+// ৬. ফরগট পাসওয়ার্ড – OTP পাঠানো (2 মিনিট মেয়াদ, 1 মিনিট রিসেন্ড ব্লক)
+app.post('/api/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ success: false, message: 'এই ইমেইলে কোনো অ্যাকাউন্ট নেই' });
+
+    // শেষ OTP তৈরির সময় থেকে ১ মিনিটের মধ্যে আবার চাইলে ব্লক
+    if (user.resetCodeExpires) {
+      const lastRequestTime = new Date(user.resetCodeExpires).getTime() - 2 * 60 * 1000; // কারণ মেয়াদ ২ মিনিট, তাই আসল তৈরি সময় = resetCodeExpires - 2 মিনিট
+      if (Date.now() - lastRequestTime < 60 * 1000) {
+        return res.status(429).json({ success: false, message: 'অনুগ্রহ করে ১ মিনিট পর আবার চেষ্টা করুন' });
+      }
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetCode = code;
+    user.resetCodeExpires = new Date(Date.now() + 2 * 60 * 1000); // 2 মিনিট
+    await user.save();
+
+    transporter.sendMail({
+      from: `"আবিদার পাড়া ক্লাব" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: '🔐 পাসওয়ার্ড রিসেট OTP',
+      html: mailBase('', `
+        <h3>পাসওয়ার্ড রিসেট OTP</h3>
+        <div style="background: #00adb5; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 10px; margin: 20px 0;">
+          ${code}
+        </div>
+        <p style="color: #888;">এই OTP ২ মিনিটের মধ্যে ব্যবহার করুন।</p>
+      `),
+    });
+
+    res.json({ success: true, message: 'পাসওয়ার্ড রিসেট OTP ইমেইলে পাঠানো হয়েছে' });
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
+});
+
+// ৭. রিসেট OTP যাচাই
+app.post('/api/verify-reset-code', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !user.resetCode || !user.resetCodeExpires) {
+      return res.status(400).json({ success: false, message: 'কোড পাওয়া যায়নি, আবার চেষ্টা করুন' });
+    }
+    if (new Date() > user.resetCodeExpires) {
+      return res.status(400).json({ success: false, message: 'কোডের মেয়াদ শেষ হয়ে গেছে' });
+    }
+    if (user.resetCode !== code.trim()) {
+      return res.status(400).json({ success: false, message: 'কোড ভুল' });
+    }
+
+    const resetToken = jwt.sign({ id: user._id, purpose: 'reset' }, JWT_SECRET, { expiresIn: '15m' });
+
+    user.resetCode = undefined;
+    user.resetCodeExpires = undefined;
+    await user.save();
+
+    res.json({ success: true, resetToken });
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
+});
+
+// ৮. পাসওয়ার্ড রিসেট (নতুন পাসওয়ার্ড সেট)
+app.post('/api/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.purpose !== 'reset') return res.status(400).json({ success: false, message: 'অবৈধ টোকেন' });
+
+    const user = await User.findById(decoded.id);
+    if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
+    user.password = newPassword;  // pre-save hook হ্যাশ করবে
+    await user.save();
+
+    res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে' });
+  } catch (err) { res.status(500).json({ success: false, message: 'টোকেন অবৈধ বা মেয়াদ উত্তীর্ণ' }); }
+});
+
+// ৯. মেম্বারশিপ ম্যানেজমেন্ট (Admin)
 app.put('/api/approve/:id', async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -258,7 +421,7 @@ app.delete('/api/users/:id', async (req, res) => {
   } catch (error) { res.json({ success: false, message: 'ডিলিট করতে সমস্যা হয়েছে' }); }
 });
 
-// ৫. প্রোফাইল আপডেট ও পাসওয়ার্ড পরিবর্তন
+// ১০. প্রোফাইল আপডেট ও পাসওয়ার্ড পরিবর্তন
 app.put('/api/users/update/:id', verifyToken, async (req, res) => {
   try {
     const { name, phone, address, bloodGroup, fatherName } = req.body;
@@ -292,7 +455,7 @@ app.put('/api/users/change-password', verifyToken, async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
 });
 
-// ৬. ইউজার স্ট্যাট (credits)
+// ১১. ইউজার স্ট্যাট (credits)
 app.get('/api/users/stats', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -301,7 +464,7 @@ app.get('/api/users/stats', verifyToken, async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, message: 'এরর' }); }
 });
 
-// ৭. চ্যাট (REST + Socket.io)
+// ১২. চ্যাট (REST + Socket.io)
 app.get('/api/chat/messages', verifyToken, async (req, res) => {
   const messages = await Chat.find().sort({ timestamp: 1 }).limit(100);
   res.json({ success: true, messages });
@@ -333,7 +496,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('মেম্বার ডিসকানেক্ট হয়েছেন'));
 });
 
-// ৮. অ্যালবাম / গ্যালারি
+// ১৩. অ্যালবাম / গ্যালারি
 app.get('/api/albums/photos', verifyToken, async (req, res) => {
   const images = await Gallery.find().sort({ date: -1 });
   res.json({ success: true, photos: images.map(img => ({ _id: img._id, url: img.imageUrl, caption: img.title })) });
@@ -356,7 +519,7 @@ app.delete('/api/gallery/:id', verifyToken, async (req, res) => {
   res.json({ success: true, message: 'ছবি মুছে ফেলা হয়েছে' });
 });
 
-// ৯. ফান্ড, নোটিশ, পোল, ইভেন্ট
+// ১৪. ফান্ড, নোটিশ, পোল, ইভেন্ট (পুশ নোটিফিকেশন সহ)
 app.get('/api/fund', async (req, res) => {
   let fund = await Fund.findOne();
   if (!fund) fund = await Fund.create({ totalAmount: 0 });
@@ -373,12 +536,12 @@ app.get('/api/notices/latest', async (req, res) => {
   res.json({ success: true, notice });
 });
 
-// নোটিশ তৈরি + পুশ
 app.post('/api/notices/add', async (req, res) => {
   try {
     const notice = new Notice({ title: req.body.title, description: req.body.description });
     await notice.save();
 
+    // পুশ নোটিফিকেশন
     const users = await User.find({ pushToken: { $exists: true, $ne: null }, status: 'approved' });
     const tokens = users.map(u => u.pushToken);
     if (tokens.length > 0) {
@@ -393,7 +556,6 @@ app.post('/api/notices/add', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// ইভেন্ট তৈরি + পুশ
 app.post('/api/events/add', async (req, res) => {
   try {
     const event = new Event(req.body);
@@ -435,7 +597,7 @@ app.get('/api/events/upcoming', async (req, res) => {
   res.json({ success: true, events });
 });
 
-// ১০. মিশন API
+// ১৫. মিশন API
 app.get('/api/missions/active', verifyToken, async (req, res) => {
   const missions = await Mission.find({ isCompleted: false });
   res.json({ success: true, missions });
@@ -477,7 +639,7 @@ app.post('/api/missions/verify', verifyToken, async (req, res) => {
   res.json({ success: true, message: 'ভেরিফিকেশন সফল! ১০ ক্রেডিট যোগ হয়েছে।', credits: user.credits });
 });
 
-// ১১. পুশ টোকেন
+// ১৬. পুশ টোকেন
 app.post('/api/users/push-token', verifyToken, async (req, res) => {
   try {
     const { pushToken } = req.body;
@@ -493,76 +655,7 @@ app.delete('/api/users/push-token', verifyToken, async (req, res) => {
   } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// ১২. ফরগট পাসওয়ার্ড (OTP ভিত্তিক)
-app.post('/api/forgot-password', async (req, res) => {
-  try {
-    const { email } = req.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ success: false, message: 'এই ইমেইলে কোনো অ্যাকাউন্ট নেই' });
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    user.resetCode = code;
-    user.resetCodeExpires = new Date(Date.now() + 15 * 60 * 1000);
-    await user.save();
-
-    transporter.sendMail({
-      from: `"আবিদার পাড়া ক্লাব" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: '🔐 পাসওয়ার্ড রিসেট কোড',
-      html: mailBase('', `
-        <h3>পাসওয়ার্ড রিসেট কোড</h3>
-        <p>আপনার পাসওয়ার্ড রিসেট করার জন্য নিচের কোডটি ব্যবহার করুন:</p>
-        <div style="background: #00adb5; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 10px; margin: 20px 0;">
-          ${code}
-        </div>
-        <p style="color: #888;">এই কোডটি ১৫ মিনিটের জন্য বৈধ।</p>
-      `),
-    });
-
-    res.json({ success: true, message: 'পাসওয়ার্ড রিসেট কোড ইমেইলে পাঠানো হয়েছে' });
-  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
-});
-
-app.post('/api/verify-reset-code', async (req, res) => {
-  try {
-    const { email, code } = req.body;
-    const user = await User.findOne({ email });
-    if (!user || !user.resetCode || !user.resetCodeExpires) {
-      return res.status(400).json({ success: false, message: 'কোড পাওয়া যায়নি, আবার চেষ্টা করুন' });
-    }
-    if (new Date() > user.resetCodeExpires) {
-      return res.status(400).json({ success: false, message: 'কোডের মেয়াদ শেষ হয়ে গেছে' });
-    }
-    if (user.resetCode !== code) {
-      return res.status(400).json({ success: false, message: 'কোড ভুল' });
-    }
-
-    const resetToken = jwt.sign({ id: user._id, purpose: 'reset' }, JWT_SECRET, { expiresIn: '15m' });
-
-    user.resetCode = undefined;
-    user.resetCodeExpires = undefined;
-    await user.save();
-
-    res.json({ success: true, resetToken });
-  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
-});
-
-app.post('/api/reset-password', async (req, res) => {
-  try {
-    const { token, newPassword } = req.body;
-    const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.purpose !== 'reset') return res.status(400).json({ success: false, message: 'অবৈধ টোকেন' });
-
-    const user = await User.findById(decoded.id);
-    if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
-    user.password = newPassword;
-    await user.save();
-
-    res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে' });
-  } catch (err) { res.status(500).json({ success: false, message: 'টোকেন অবৈধ বা মেয়াদ উত্তীর্ণ' }); }
-});
-
-// ১৩. অন্যান্য অ্যাডমিন
+// ১৭. অন্যান্য অ্যাডমিন এন্ডপয়েন্ট
 app.post('/api/fund/update', async (req, res) => {
   let fund = await Fund.findOne();
   if (!fund) fund = new Fund({ totalAmount: Number(req.body.amount) });
@@ -581,7 +674,7 @@ app.post('/api/committee/add', async (req, res) => {
   res.json({ success: true, message: 'কমিটি প্যানেল আপডেট হয়েছে' });
 });
 
-// ১৪. সার্ভার স্টার্ট
+// ==================== সার্ভার স্টার্ট ====================
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 একতাবদ্ধ বি.পি সার্ভার চালু হয়েছে: http://localhost:${PORT}`);
