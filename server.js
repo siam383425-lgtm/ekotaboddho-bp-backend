@@ -1,7 +1,3 @@
-// server.js (ফুল আপডেটেড – bcrypt, পুশ নোটিফিকেশন, ফরগট পাসওয়ার্ড, চ্যাট, ক্লাউডিনারি, গুগল ড্রাইভ)
-// প্রয়োজনীয় প্যাকেজ:
-// express, mongoose, cors, nodemailer, socket.io, cloudinary, jsonwebtoken, bcryptjs, googleapis, dotenv
-
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -14,31 +10,24 @@ const bcrypt = require('bcryptjs');
 const { google } = require('googleapis');
 require('dotenv').config();
 
-// ================== ১. অ্যাপ ও সার্ভার ==================
 const app = express();
 const server = http.createServer(app);
 
-// ================== ২. মিডলওয়্যার ==================
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// ================== ৩. ক্লাউডিনারি ==================
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// ================== ৪. JWT সিক্রেট ==================
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 
-// ================== ৫. ডাটাবেস ==================
-mongoose
-  .connect(process.env.MONGO_URI)
+mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ ডাটাবেস সফলভাবে কানেক্ট হয়েছে!'))
   .catch((err) => console.log('❌ ডাটাবেস কানেকশন এরর: ', err));
 
-// ================== ৬. অথেনটিকেশন মিডলওয়্যার ==================
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -54,10 +43,8 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// ================== ৭. মডেল সমূহ ==================
 const User = require('./models/User');
 
-// চ্যাট
 const ChatSchema = new mongoose.Schema({
   sender: String,
   text: String,
@@ -69,7 +56,6 @@ const ChatSchema = new mongoose.Schema({
 });
 const Chat = mongoose.model('Chat', ChatSchema);
 
-// গ্যালারি
 const GallerySchema = new mongoose.Schema({
   imageUrl: String,
   title: String,
@@ -78,14 +64,12 @@ const GallerySchema = new mongoose.Schema({
 });
 const Gallery = mongoose.model('Gallery', GallerySchema);
 
-// ফান্ড
 const FundSchema = new mongoose.Schema({
   totalAmount: { type: Number, default: 0 },
   lastUpdated: { type: Date, default: Date.now },
 });
 const Fund = mongoose.model('Fund', FundSchema);
 
-// নোটিশ
 const NoticeSchema = new mongoose.Schema({
   title: String,
   description: String,
@@ -93,7 +77,6 @@ const NoticeSchema = new mongoose.Schema({
 });
 const Notice = mongoose.model('Notice', NoticeSchema);
 
-// পোল
 const PollSchema = new mongoose.Schema({
   question: String,
   options: [{ text: String, votes: { type: Number, default: 0 } }],
@@ -102,7 +85,6 @@ const PollSchema = new mongoose.Schema({
 });
 const Poll = mongoose.model('Poll', PollSchema);
 
-// ইভেন্ট
 const EventSchema = new mongoose.Schema({
   title: String,
   date: Date,
@@ -111,7 +93,6 @@ const EventSchema = new mongoose.Schema({
 });
 const Event = mongoose.model('Event', EventSchema);
 
-// মিশন
 const MissionSchema = new mongoose.Schema({
   title: String,
   description: String,
@@ -126,7 +107,6 @@ const MissionSchema = new mongoose.Schema({
 });
 const Mission = mongoose.model('Mission', MissionSchema);
 
-// ================== ৮. ইমেইল ট্রান্সপোর্টার ==================
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -135,7 +115,12 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ================== ৯. সুন্দর ইমেইল টেমপ্লেট ==================
+const auth = new google.auth.GoogleAuth({
+  keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY_PATH,
+  scopes: ['https://www.googleapis.com/auth/drive.file'],
+});
+const drive = google.drive({ version: 'v3', auth });
+
 const mailBase = (title, bodyHtml) => `
   <div style="max-width: 600px; margin: auto; padding: 20px; background: #f4f6f8; border-radius: 12px; font-family: 'Segoe UI', Tahoma, sans-serif;">
     <div style="text-align: center; margin-bottom: 20px;">
@@ -148,15 +133,13 @@ const mailBase = (title, bodyHtml) => `
     <p style="text-align: center; font-size: 11px; color: #bbb; margin-top: 15px;">© 2026 আবিদার পাড়া ক্লাব। সর্বস্বত্ব সংরক্ষিত।</p>
   </div>`;
 
-// ================== ১০. API রুট ==================
+// ======================= API রাউট =======================
 
-// --- ১. ইমেজ আপলোড ---
+// ১. ইমেজ আপলোড
 app.post('/api/upload', async (req, res) => {
   try {
     const fileStr = req.body.data;
-    const uploadResponse = await cloudinary.uploader.upload(fileStr, {
-      upload_preset: 'ml_default',
-    });
+    const uploadResponse = await cloudinary.uploader.upload(fileStr, { upload_preset: 'ml_default' });
     res.json({ success: true, url: uploadResponse.secure_url });
   } catch (error) {
     console.error(error);
@@ -164,7 +147,7 @@ app.post('/api/upload', async (req, res) => {
   }
 });
 
-// --- ২. প্রোফাইল পিকচার আপলোড ---
+// ২. প্রোফাইল ছবি আপলোড
 app.post('/api/users/profile-picture', verifyToken, async (req, res) => {
   try {
     const { image } = req.body;
@@ -173,14 +156,13 @@ app.post('/api/users/profile-picture', verifyToken, async (req, res) => {
     const uploadResponse = await cloudinary.uploader.upload(image, {
       folder: 'profile_pictures',
       public_id: `user_${req.userId}_${Date.now()}`,
-      transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face' }],
+      transformation: [{ width: 300, height: 300, crop: 'fill', gravity: 'face' }]
     });
 
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
     user.photoUrl = uploadResponse.secure_url;
     await user.save();
-
     res.json({ success: true, photoUrl: uploadResponse.secure_url });
   } catch (err) {
     console.error(err);
@@ -188,7 +170,7 @@ app.post('/api/users/profile-picture', verifyToken, async (req, res) => {
   }
 });
 
-// --- ৩. রেজিস্ট্রেশন ও লগইন (bcrypt) ---
+// ৩. রেজিস্ট্রেশন ও লগইন (bcrypt)
 app.post('/api/register', async (req, res) => {
   try {
     const { name, email, phone, fatherName, address, bloodGroup, password } = req.body;
@@ -210,9 +192,7 @@ app.post('/api/register', async (req, res) => {
     });
 
     res.status(201).json({ success: true, message: 'রেজিস্ট্রেশন সফল!', token, user: newUser });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'সার্ভার এরর!' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর!' }); }
 });
 
 app.post('/api/login', async (req, res) => {
@@ -226,12 +206,10 @@ app.post('/api/login', async (req, res) => {
 
     const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ success: true, user, token });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'সার্ভার এরর!' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর!' }); }
 });
 
-// --- ৪. মেম্বারশিপ ম্যানেজমেন্ট ---
+// ৪. মেম্বারশিপ ম্যানেজমেন্ট (Admin)
 app.put('/api/approve/:id', async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
@@ -260,9 +238,7 @@ app.put('/api/approve/:id', async (req, res) => {
     });
 
     res.json({ success: true, memberId: newId });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'এরর!' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'এরর!' }); }
 });
 
 app.get('/api/users/pending', async (req, res) => {
@@ -279,19 +255,16 @@ app.delete('/api/users/:id', async (req, res) => {
   try {
     await User.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'বাতিল করা হয়েছে' });
-  } catch (error) {
-    res.json({ success: false, message: 'ডিলিট করতে সমস্যা হয়েছে' });
-  }
+  } catch (error) { res.json({ success: false, message: 'ডিলিট করতে সমস্যা হয়েছে' }); }
 });
 
-// --- ৫. প্রোফাইল আপডেট ও পাসওয়ার্ড পরিবর্তন ---
+// ৫. প্রোফাইল আপডেট ও পাসওয়ার্ড পরিবর্তন
 app.put('/api/users/update/:id', verifyToken, async (req, res) => {
   try {
     const { name, phone, address, bloodGroup, fatherName } = req.body;
     const user = await User.findById(req.params.id);
     if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
-    if (req.userId !== user._id.toString())
-      return res.status(403).json({ success: false, message: 'অনুমতি নেই' });
+    if (req.userId !== user._id.toString()) return res.status(403).json({ success: false, message: 'অনুমতি নেই' });
 
     user.name = name || user.name;
     user.phone = phone || user.phone;
@@ -300,9 +273,7 @@ app.put('/api/users/update/:id', verifyToken, async (req, res) => {
     user.fatherName = fatherName || user.fatherName;
     await user.save();
     res.json({ success: true, message: 'প্রোফাইল আপডেট হয়েছে' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'সার্ভার এরর' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
 });
 
 app.put('/api/users/change-password', verifyToken, async (req, res) => {
@@ -310,8 +281,7 @@ app.put('/api/users/change-password', verifyToken, async (req, res) => {
     const { userId, oldPassword, newPassword } = req.body;
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
-    if (req.userId !== user._id.toString())
-      return res.status(403).json({ success: false, message: 'অনুমতি নেই' });
+    if (req.userId !== user._id.toString()) return res.status(403).json({ success: false, message: 'অনুমতি নেই' });
 
     const isMatch = await bcrypt.compare(oldPassword, user.password);
     if (!isMatch) return res.status(400).json({ success: false, message: 'পুরনো পাসওয়ার্ড ভুল' });
@@ -319,23 +289,19 @@ app.put('/api/users/change-password', verifyToken, async (req, res) => {
     user.password = newPassword;
     await user.save();
     res.json({ success: true, message: 'পাসওয়ার্ড পরিবর্তন হয়েছে' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'সার্ভার এরর' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
 });
 
-// --- ৬. ইউজার স্ট্যাট (credits) ---
+// ৬. ইউজার স্ট্যাট (credits)
 app.get('/api/users/stats', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
     if (!user) return res.status(404).json({ success: false, message: 'ইউজার পাওয়া যায়নি' });
     res.json({ success: true, missions: 0, events: 0, points: user.credits || 0 });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'এরর' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'এরর' }); }
 });
 
-// --- ৭. চ্যাট (REST + Socket.io) ---
+// ৭. চ্যাট (REST + Socket.io)
 app.get('/api/chat/messages', verifyToken, async (req, res) => {
   const messages = await Chat.find().sort({ timestamp: 1 }).limit(100);
   res.json({ success: true, messages });
@@ -349,9 +315,7 @@ app.post('/api/chat/send', verifyToken, async (req, res) => {
     const chatMsg = new Chat({ sender: user.name, text, timestamp: new Date() });
     await chatMsg.save();
     res.json({ success: true, message: 'পাঠানো হয়েছে' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'সার্ভার এরর' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
 });
 
 const io = new Server(server, { cors: { origin: '*', methods: ['GET', 'POST'] } });
@@ -369,7 +333,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('মেম্বার ডিসকানেক্ট হয়েছেন'));
 });
 
-// --- ৮. অ্যালবাম / গ্যালারি ---
+// ৮. অ্যালবাম / গ্যালারি
 app.get('/api/albums/photos', verifyToken, async (req, res) => {
   const images = await Gallery.find().sort({ date: -1 });
   res.json({ success: true, photos: images.map(img => ({ _id: img._id, url: img.imageUrl, caption: img.title })) });
@@ -392,7 +356,7 @@ app.delete('/api/gallery/:id', verifyToken, async (req, res) => {
   res.json({ success: true, message: 'ছবি মুছে ফেলা হয়েছে' });
 });
 
-// --- ৯. ফান্ড, নোটিশ, পোল, ইভেন্ট ---
+// ৯. ফান্ড, নোটিশ, পোল, ইভেন্ট
 app.get('/api/fund', async (req, res) => {
   let fund = await Fund.findOne();
   if (!fund) fund = await Fund.create({ totalAmount: 0 });
@@ -409,7 +373,7 @@ app.get('/api/notices/latest', async (req, res) => {
   res.json({ success: true, notice });
 });
 
-// নোটিশ তৈরি + পুশ নোটিফিকেশন
+// নোটিশ তৈরি + পুশ
 app.post('/api/notices/add', async (req, res) => {
   try {
     const notice = new Notice({ title: req.body.title, description: req.body.description });
@@ -426,12 +390,10 @@ app.post('/api/notices/add', async (req, res) => {
     }
 
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
+  } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// ইভেন্ট তৈরি + পুশ নোটিফিকেশন
+// ইভেন্ট তৈরি + পুশ
 app.post('/api/events/add', async (req, res) => {
   try {
     const event = new Event(req.body);
@@ -448,9 +410,7 @@ app.post('/api/events/add', async (req, res) => {
     }
 
     res.json({ success: true, message: 'ইভেন্ট যোগ হয়েছে' });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
+  } catch (err) { res.status(500).json({ success: false }); }
 });
 
 app.get('/api/polls/active', async (req, res) => {
@@ -463,8 +423,7 @@ app.post('/api/polls/vote', verifyToken, async (req, res) => {
   const userId = req.userId;
   const poll = await Poll.findById(pollId);
   if (!poll) return res.status(404).json({ success: false, message: 'পোল পাওয়া যায়নি' });
-  if (poll.votedUsers.includes(userId))
-    return res.status(400).json({ success: false, message: 'ইতিমধ্যেই ভোট দিয়েছেন!' });
+  if (poll.votedUsers.includes(userId)) return res.status(400).json({ success: false, message: 'ইতিমধ্যেই ভোট দিয়েছেন!' });
   poll.options[optionIndex].votes += 1;
   poll.votedUsers.push(userId);
   await poll.save();
@@ -476,7 +435,7 @@ app.get('/api/events/upcoming', async (req, res) => {
   res.json({ success: true, events });
 });
 
-// --- ১০. মিশন API ---
+// ১০. মিশন API
 app.get('/api/missions/active', verifyToken, async (req, res) => {
   const missions = await Mission.find({ isCompleted: false });
   res.json({ success: true, missions });
@@ -518,49 +477,74 @@ app.post('/api/missions/verify', verifyToken, async (req, res) => {
   res.json({ success: true, message: 'ভেরিফিকেশন সফল! ১০ ক্রেডিট যোগ হয়েছে।', credits: user.credits });
 });
 
-// --- ১১. পুশ টোকেন ---
+// ১১. পুশ টোকেন
 app.post('/api/users/push-token', verifyToken, async (req, res) => {
   try {
     const { pushToken } = req.body;
     await User.findByIdAndUpdate(req.userId, { pushToken });
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
+  } catch (err) { res.status(500).json({ success: false }); }
 });
 
 app.delete('/api/users/push-token', verifyToken, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.userId, { $unset: { pushToken: 1 } });
     res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false });
-  }
+  } catch (err) { res.status(500).json({ success: false }); }
 });
 
-// --- ১২. ফরগট পাসওয়ার্ড ---
+// ১২. ফরগট পাসওয়ার্ড (OTP ভিত্তিক)
 app.post('/api/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ success: false, message: 'এই ইমেইলে কোনো অ্যাকাউন্ট নেই' });
 
-    const resetToken = jwt.sign({ id: user._id, purpose: 'reset' }, JWT_SECRET, { expiresIn: '15m' });
-    const resetLink = `https://yourapp.com/reset-password?token=${resetToken}`;
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetCode = code;
+    user.resetCodeExpires = new Date(Date.now() + 15 * 60 * 1000);
+    await user.save();
 
     transporter.sendMail({
       from: `"আবিদার পাড়া ক্লাব" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: '🔐 পাসওয়ার্ড রিসেট',
-      html: mailBase('', `<p>পাসওয়ার্ড রিসেট করতে নিচের লিংকে ক্লিক করুন:</p>
-        <a href="${resetLink}">${resetLink}</a>
-        <p>(লিংকটি ১৫ মিনিটের জন্য কার্যকর)</p>`),
+      subject: '🔐 পাসওয়ার্ড রিসেট কোড',
+      html: mailBase('', `
+        <h3>পাসওয়ার্ড রিসেট কোড</h3>
+        <p>আপনার পাসওয়ার্ড রিসেট করার জন্য নিচের কোডটি ব্যবহার করুন:</p>
+        <div style="background: #00adb5; color: white; padding: 20px; border-radius: 10px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 10px; margin: 20px 0;">
+          ${code}
+        </div>
+        <p style="color: #888;">এই কোডটি ১৫ মিনিটের জন্য বৈধ।</p>
+      `),
     });
 
-    res.json({ success: true, message: 'পাসওয়ার্ড রিসেট লিংক ইমেইলে পাঠানো হয়েছে' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'সার্ভার এরর' });
-  }
+    res.json({ success: true, message: 'পাসওয়ার্ড রিসেট কোড ইমেইলে পাঠানো হয়েছে' });
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
+});
+
+app.post('/api/verify-reset-code', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    const user = await User.findOne({ email });
+    if (!user || !user.resetCode || !user.resetCodeExpires) {
+      return res.status(400).json({ success: false, message: 'কোড পাওয়া যায়নি, আবার চেষ্টা করুন' });
+    }
+    if (new Date() > user.resetCodeExpires) {
+      return res.status(400).json({ success: false, message: 'কোডের মেয়াদ শেষ হয়ে গেছে' });
+    }
+    if (user.resetCode !== code) {
+      return res.status(400).json({ success: false, message: 'কোড ভুল' });
+    }
+
+    const resetToken = jwt.sign({ id: user._id, purpose: 'reset' }, JWT_SECRET, { expiresIn: '15m' });
+
+    user.resetCode = undefined;
+    user.resetCodeExpires = undefined;
+    await user.save();
+
+    res.json({ success: true, resetToken });
+  } catch (err) { res.status(500).json({ success: false, message: 'সার্ভার এরর' }); }
 });
 
 app.post('/api/reset-password', async (req, res) => {
@@ -575,12 +559,10 @@ app.post('/api/reset-password', async (req, res) => {
     await user.save();
 
     res.json({ success: true, message: 'পাসওয়ার্ড সফলভাবে পরিবর্তন হয়েছে' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'টোকেন অবৈধ বা মেয়াদ উত্তীর্ণ' });
-  }
+  } catch (err) { res.status(500).json({ success: false, message: 'টোকেন অবৈধ বা মেয়াদ উত্তীর্ণ' }); }
 });
 
-// --- ১৩. অন্যান্য অ্যাডমিন ---
+// ১৩. অন্যান্য অ্যাডমিন
 app.post('/api/fund/update', async (req, res) => {
   let fund = await Fund.findOne();
   if (!fund) fund = new Fund({ totalAmount: Number(req.body.amount) });
@@ -599,7 +581,7 @@ app.post('/api/committee/add', async (req, res) => {
   res.json({ success: true, message: 'কমিটি প্যানেল আপডেট হয়েছে' });
 });
 
-// ================== ১৪. সার্ভার স্টার্ট ==================
+// ১৪. সার্ভার স্টার্ট
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 একতাবদ্ধ বি.পি সার্ভার চালু হয়েছে: http://localhost:${PORT}`);
