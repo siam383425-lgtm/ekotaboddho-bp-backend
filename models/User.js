@@ -1,3 +1,4 @@
+// models/User.js
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -14,11 +15,22 @@ const userSchema = new mongoose.Schema({
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
 
   photoUrl: { type: String, default: '' },
-  credits: { type: Number, default: 0 },
-  pushToken: { type: String, default: null },
 
+  // 2FA
+  twoFactorEnabled: { type: Boolean, default: false },
+  twoFactorCode: { type: String, default: null },
+  twoFactorCodeExpires: { type: Date, default: null },
+  twoFactorToken: { type: String, default: null },
+
+  // পাসওয়ার্ড রিসেট OTP
   resetCode: { type: String, default: null },
   resetCodeExpires: { type: Date, default: null },
+
+  // পুশ নোটিফিকেশন
+  pushToken: { type: String, default: null },
+
+  // ক্রেডিট
+  credits: { type: Number, default: 0 },
 
   joinDate: { type: Date, default: Date.now }
 });
