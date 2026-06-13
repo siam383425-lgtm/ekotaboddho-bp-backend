@@ -1,4 +1,3 @@
-// models/User.js
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -31,6 +30,9 @@ const userSchema = new mongoose.Schema({
 
   // ক্রেডিট
   credits: { type: Number, default: 0 },
+
+  // মাল্টি-ডিভাইস লগইন কন্ট্রোল
+  tokenVersion: { type: Number, default: 0 },
 
   joinDate: { type: Date, default: Date.now }
 });
