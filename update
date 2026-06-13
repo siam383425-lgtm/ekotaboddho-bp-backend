@@ -1,0 +1,2 @@
+eas update:configure    
+eas update --branch production --message "New features added"
